@@ -1,0 +1,72 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the uc_uapay module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function uc_uapay_schema() {
+  $schema = array();
+
+  $schema['uc_uapay_comments'] = array(
+      'description' => 'Comments on UaPay that only administrators can see.',
+      'fields' => array(
+        'comment_id' => array(
+          'description' => 'Primary key: the comment ID.',
+          'type' => 'serial',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+        ),
+        'order_id' => array(
+          'description' => 'The {uc_orders}.order_id of the order.',
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+        'amount' => array(
+          'description' => "The amount of the line item in the store's currency.",
+          'type' => 'numeric',
+          'precision' => 16,
+          'scale' => 5,
+          'not null' => TRUE,
+          'default' => 0.0,
+        ),
+        'typeOperation' => array(
+          'description' => 'TypeOperation',
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => TRUE,
+          'default' => '',
+        ),
+        'invoiceId' => array(
+          'description' => 'invoiceId',
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => TRUE,
+          'default' => '',
+        ),
+        'paymentId' => array(
+          'description' => 'paymentId',
+          'type' => 'varchar',
+          'length' => 255,
+          'not null' => TRUE,
+          'default' => '',
+        ),
+      ),
+      'indexes' => array(
+        'order_id' => array('order_id'),
+      ),
+      'primary key' => array('comment_id'),
+      'foreign keys' => array(
+        'uc_orders' => array(
+          'table' => 'uc_orders',
+          'columns' => array('order_id' => 'order_id'),
+        ),
+      ),
+  );
+  return $schema;
+}

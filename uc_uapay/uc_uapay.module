@@ -1,0 +1,193 @@
+<?php
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\uc_order\Entity\Order;
+use Drupal\uc_uapay\UaPayApi;
+use Drupal\uc_order\Form\OrderUpdateForm;
+use Drupal\uc_uapay\Controller\UaPayController;
+use Drupal\Core\Entity\EntityInterface;
+use \Symfony\Component\HttpFoundation\Response;
+
+/**
+ * Implementation of hook_uc_payment_method().
+ */
+function uc_uapay_uc_payment_method()
+{
+  $methods['uapay'] = array(
+    'id' => 'uapay',
+    'name' => t('UaPay'),
+    'title' => t('Payment via UaPay'),
+    'desc' => t('Pay through UaPay'),
+    'weight' => 1,
+    'checkout' => true,
+    'no_gateway' => true,
+  );
+  return $methods;
+}
+
+function uc_uapay_help($route_name, RouteMatchInterface $route_match)
+{
+// Provide information and instructions on the payment method add and edit forms.
+  if ($route_name == 'entity.uc_payment_method.add_form' &&
+    $route_match->getRawParameter('plugin_id') == 'uapay') {
+    return '<p>' . t('Для приема платежей с помощью UaPay. Пожалуйста убедитесь, что выбраная валюта соответствует настройкам вашего магазина.') .
+      '</p>';
+  } elseif ($route_name == 'entity.uc_payment_method.edit_form' &&
+    $route_match->getParameter('uc_payment_method')->getPlugin()->getPluginId() == 'uapay') {
+    return '<p>' . t('Для приема платежей с помощью UaPay. Пожалуйста убедитесь, что выбраная валюта соответствует настройкам вашего магазина.') . '</p>';
+  }
+}
+
+function uc_uapay_theme()
+{
+  return [
+    'payways_form' => [
+      'render element' => 'form',
+    ],
+  ];
+}
+
+function uc_uapay_preprocess_page(&$variables)
+{
+
+  $current_path = \Drupal::service('path.current')->getPath();
+  if ($current_path == '/cart/checkout/review') {
+    $variables['#attached']['library'][] = 'uc_uapay/uapay';
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for uc_order_view_update_form_alter().
+ * uc-order-view-update-form
+ * uc-payment-by-order-form
+ */
+function uc_uapay_form_uc_order_view_update_form_alter(&$form, FormStateInterface $form_state)
+{
+  UaPayApi::writeLog('form_alter', ' ');
+
+  if (!empty($_POST['form_id']) && $_POST['form_id'] == 'uc_order_view_update_form') {
+    $refund_order_id = $form['order_id']["#value"];
+
+    switch ($_POST['status']) {
+      case 'canceled':
+        uc_uapay_form_order_refund_process($refund_order_id);
+        break;
+      case 'payment_received':
+        uc_uapay_form_order_capture_process($refund_order_id);
+        break;
+    }
+  }
+
+  return $form;
+}
+
+//function uc_uapay_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id)
+//{ //при заходе на страницу
+//  UaPayApi::writeLog(array($form), '$form', '');
+//  UaPayApi::writeLog(array($form_state), '$form_state', '');
+//  UaPayApi::writeLog(array($form_id), '$form_id', '');
+//  if($form_id=='uc_order_view_update_form') {
+//    $form['controls']['#submit'][]='uc_uapay_form_order_process';
+//  }
+//}
+
+
+function uc_uapay_form_order_refund_process($refund_order_id)
+{
+  UaPayApi::writeLog($refund_order_id, 'refund_process', '');
+
+  // Load order using order id.
+  $order = Order::load($refund_order_id);
+  // Get current order payment method.
+  $plugin = \Drupal::service('plugin.manager.uc_payment.method')->createFromOrder($order);
+  $configuration = $plugin->getConfiguration();
+
+  $query = \Drupal::database()->select('uc_uapay_comments', 'ufd');
+  $query->fields('ufd', array('invoiceId', 'paymentId', 'typeOperation', 'amount'));
+  $query->condition('ufd.order_id', $refund_order_id);
+  $uapay_payment_info = $query->execute()->fetchAssoc();
+  $message = '';
+
+  UaPayApi::writeLog(array($uapay_payment_info), '$uapay_payment_info', '');
+
+  if (!empty($uapay_payment_info) && !empty($uapay_payment_info['paymentId'])) {
+    $uapay = new UaPayApi($configuration);
+    $uapay->testMode();
+    $invoice = $uapay->getDataInvoice($uapay_payment_info['invoiceId']);
+    $payment = $invoice['payments'][0];
+
+    $uapay->setInvoiceId($uapay_payment_info['invoiceId']);
+    $uapay->setPaymentId($uapay_payment_info['paymentId']);
+
+    $status = $order->getStatusId();
+    $amount = $order->getTotal();
+
+    if ($uapay_payment_info['typeOperation'] == UaPayApi::STATUS_FINISHED && $uapay_payment_info['amount'] < $order->getTotal()) {
+      uc_order_comment_save($order->id(), 1, t('Error! Сумма заказа - @am_order превышает сумму платежа - @am_payment. Возврат не возможет! Измените статус на "Payment received", проверьте сумму и попробуйте снова.', ['@am_order' => uc_currency_format($order->getTotal()), '@am_payment' => uc_currency_format($uapay_payment_info['amount'])]), 'admin');
+    } else {
+      if ($uapay_payment_info['amount'] > $order->getTotal()) {
+        $uapay->setDataAmount($order->getTotal());
+        UaPayApi::writeLog('partial', '', '');
+      }
+      UaPayApi::writeLog($payment['paymentStatus'], 'paymentStatus', '');
+
+      switch ($uapay_payment_info['typeOperation']) {
+        case UaPayApi::STATUS_FINISHED:
+          $result = $uapay->reverseInvoice();
+          $message = 'Заказ был успешно возвращен через UaPay';
+          $status = 'canceled';
+          $method = UaPayApi::STATUS_REVERSED;
+          break;
+        case UaPayApi::STATUS_HOLDED:
+          $result = $uapay->cancelInvoice();
+          $message = 'Платеж был успешно разблокирован через UaPay';
+          $amount = $uapay_payment_info['amount'];
+          $status = 'canceled';
+          $method = UaPayApi::STATUS_CANCELED;
+          break;
+        case UaPayApi::STATUS_CANCELED:
+          $result = $uapay->cancelInvoice();
+          break;
+        case UaPayApi::STATUS_REVERSED:
+          $result = $uapay->reverseInvoice();
+          break;
+      }
+      UaPayApi::writeLog(array($result), '$result', '');
+      if (!empty($result['status'])) {
+        UaPayApi::writeLog('ok', '', '');
+
+        \Drupal::database()->update('uc_uapay_comments')
+          ->fields(array(
+            'typeOperation' => $method,
+          ))
+          ->condition('order_id', $refund_order_id)
+          ->execute();
+
+        uc_order_comment_save($order->id(), 1, t('@message: @amount', ['@message' => $message, '@amount' => uc_currency_format($amount)]), 'admin');
+        uc_order_comment_save($order->id(), 1, t('@message: @amount', ['@message' => $message, '@amount' => uc_currency_format($amount)]), 'order', $status);
+
+        $comment = 'Платеж UaPay был возвращен методом ' . $method . ', номер заказа: ' . $refund_order_id;
+        uc_payment_enter($refund_order_id, 'uapay', $order->getTotal(), $order->getOwnerId(), NULL, $comment);
+      } else {
+        UaPayApi::writeLog($uapay->messageError, 'Error! ', '');
+        UaPayApi::writeLog($uapay->messageErrorCode, 'messageErrorCode! ', '');
+        UaPayApi::writeLog($status, '$status', '');
+
+        uc_order_comment_save($order->id(), 1, t('Error! @mes', ['@mes' => $uapay->messageError]), 'admin');
+      }
+    }
+  } else {
+    UaPayApi::writeLog('else', '', '');
+    // Payment is not captured or payment id is not in the database.
+    \Drupal::logger('uc_payment')->warning(t('UaPay payment was not successful with payment id. The payment id has not found in order @order_id.', ['@order_id' => $order->id()]));
+    uc_order_comment_save($order->id(), 1, t('UaPay payment was not successful with payment id. The payment id has not found in order @order_id.', ['@order_id' => $order->id()]), 'admin');
+  }
+}
+
+function uc_uapay_form_order_capture_process($refund_order_id)
+{
+  $f = new UaPayController();
+  $f->capture($refund_order_id);
+}
+

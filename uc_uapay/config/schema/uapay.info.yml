@@ -1,0 +1,19 @@
+uc_uapay.settings:
+  type: config_object
+  label: 'UaPay payment method configuration settings'
+  mapping:
+    CLIENT_ID:
+      type: string
+      label: 'CLIENT_ID'
+    SECRET_KEY:
+      type: string
+      label: 'SECRET_KEY'
+    TYPE_PAYMENT:
+      type: integer
+      label: 'Authorization_payment'
+    TEST_MODE:
+      type: integer
+      label: 'Test_mode'
+    REDIRECT_URL:
+      type: string
+      label: 'REDIRECT_URL'

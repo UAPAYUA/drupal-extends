@@ -1,0 +1,19 @@
+uc_uapay.complete:
+  path: '/cart/uapay/complete/{uc_order}'
+  defaults:
+    _controller: '\Drupal\uc_uapay\Controller\UaPayController::complete'
+    _title: 'Order complete'
+  requirements:
+    _permission: 'access content'
+
+uc_uapay.notification:
+  path: '/cart/uapay/notification/{uc_order}'
+  defaults:
+    _controller: '\Drupal\uc_uapay\Controller\UaPayController::notification'
+    _title: 'Notification callback'
+  requirements:
+    _permission: 'access content'
+
+  uc_uapay_form_order_process:
+    path: '/cart/uapay/process/{uc_order}'
+    _controller: '\Drupal\uc_uapay\Controller\UaPayController::process'
